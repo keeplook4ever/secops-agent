@@ -1,0 +1,31 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+agent
+
+# Test binary
+*.test
+
+# Go build cache
+*.out
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Output directory (generated reports, audit logs)
+output/
+
+# Environment files (may contain API keys)
+.env
+.env.*
