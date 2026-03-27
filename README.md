@@ -95,7 +95,7 @@ Run the LLM analysis pipeline and generate reports locally:
 
 ```bash
 export SECOPS_LLM_API_KEY="your-anthropic-api-key"
-export SECOPS_LOG_FILE="../Attachment_sample-logs-50.json"
+export SECOPS_LOG_FILE="./sample-log/Attachment_sample-logs-50.json" 
 export SECOPS_LLM_MODEL="claude-sonnet-4-6"
 
 # Optional overrides:
@@ -157,7 +157,7 @@ The `serve` API reads from `SECOPS_OUTPUT_DIR`, so run analysis once before star
 
 ```bash
 export SECOPS_LLM_API_KEY="your-anthropic-api-key"
-export SECOPS_LOG_FILE="../Attachment_sample-logs-50.json"
+export SECOPS_LOG_FILE="./sample-log/Attachment_sample-logs-50.json"
 go run ./cmd/agent/ analyze
 ```
 
