@@ -27,6 +27,17 @@ secops-agent/
 │   ├── reporter/
 │   │   ├── json_reporter.go       Structured JSON incident report + per-tenant output
 │   │   └── markdown_reporter.go   Human-readable Markdown summary + per-tenant output
+│   ├── remediation/
+│   │   ├── action.go              ActionType, RiskLevel, ActionSpec, ActionOutcome types
+│   │   ├── adapter.go             Port interfaces: RateLimiter, IPBlocker, AccountBanner,
+│   │   │                          TenantIsolator, Notifier + AdapterSet bundle
+│   │   ├── dispatcher.go          Pure function: (severity, pattern, scope) → []ActionSpec
+│   │   ├── engine.go              Engine orchestrator: dedup, dry-run, human gate, execution
+│   │   ├── audit.go               RemediationAuditLogger — append-only JSON Lines
+│   │   ├── approval.go            PendingApprovalWriter — human-gate queue
+│   │   └── adapters/
+│   │       ├── noop.go            NoOp stubs (log intent, no real API calls)
+│   │       └── http.go            HTTP stub templates (TODO comments, panic until implemented)
 │   └── server/
 │       ├── server.go              HTTP report server entry point
 │       ├── auth.go                JWT HS256 parsing + RBAC middleware
@@ -75,6 +86,13 @@ JSON Log File
        • Global: incident_report.json + incident_summary.md
        • Per-tenant: output/tenants/<tenant_id>/...
        • Platform: output/platform/...
+[IncidentReport]
+    │
+    ▼  remediation.Engine  (if SECOPS_REMEDIATION_ENABLED=true)
+       • Dispatches actions by (severity, attack_pattern, scope)
+       • Low-risk: auto-execute via adapters (NoOp by default)
+       • High-risk: write to pending_approvals.json + notify IM
+       • Every decision written to output/remediation_audit.log
 ```
 
 ## Prerequisites
@@ -108,21 +126,23 @@ go run ./cmd/agent/ analyze
 go run ./cmd/agent/
 ```
 
-Output directory structure (DESIGN.md Q1-Step4):
+Output directory structure:
 ```
 output/
-├── incident_report.json         ← Global report (all tenants, for secops-admin)
-├── incident_summary.md          ← Global human-readable summary
+├── incident_report.json          ← Global report (all tenants, for secops-admin)
+├── incident_summary.md           ← Global human-readable summary
 ├── tenants/
 │   ├── 600647/
-│   │   ├── incident_report.json ← Only this tenant's findings
+│   │   ├── incident_report.json  ← Only this tenant's findings
 │   │   └── incident_summary.md
 │   ├── 701234/
 │   │   └── ...
 │   └── ...
-└── platform/
-    ├── incident_report.json     ← PLATFORM-scoped findings only
-    └── incident_summary.md
+├── platform/
+│   ├── incident_report.json      ← PLATFORM-scoped findings only
+│   └── incident_summary.md
+├── remediation_audit.log         ← Every remediation decision (JSON Lines)
+└── pending_approvals.json        ← High-risk actions awaiting human sign-off
 ```
 
 Quick local checks after analyze:
@@ -287,26 +307,103 @@ Audit log format (JSON Lines, append-only):
 {"ts":"2026-03-27T12:00:00Z","role":"tenant-admin","sub":"ops@acme.com","tenant_id":"600647","path":"/api/v1/reports/600647","method":"GET","status":200}
 ```
 
-## Adding a New LLM Provider
+## Mode 3: Remediation Engine
 
-1. Create `internal/llm/openai.go` (or `vertex.go`, etc.)
-2. Implement `llm.Client`:
-   ```go
-   type OpenAIClient struct { ... }
-   func (c *OpenAIClient) Analyze(ctx context.Context, batch models.SanitizedBatch) ([]byte, error) { ... }
-   ```
-3. Add a `case "openai":` branch in `cmd/agent/main.go`
+The remediation engine is **disabled by default** and runs after report generation. It maps findings to enforcement actions and writes a full audit trail.
 
-No other changes required — the interface boundary ensures the rest of the pipeline is unaffected.
+### Enable and configure
 
-## Security Design
+```bash
+# Minimum: enable the engine (dry-run mode by default — no real API calls)
+export SECOPS_REMEDIATION_ENABLED=true
 
-See [DESIGN.md](../DESIGN.md) for the full Part B design document covering:
-- Multi-tenant data isolation strategy
-- Prompt injection threat model for the LLM pipeline
-- Access control model for incident reports
+# To actually execute actions, disable dry-run:
+export SECOPS_REMEDIATION_DRY_RUN=false
 
-## Key Security Properties
+# Optional tuning:
+export SECOPS_REMEDIATION_MIN_SEVERITY=HIGH   # skip MEDIUM/LOW/INFO
+export SECOPS_REMEDIATION_BLOCK_IP_RISK=low   # "low"=auto, "high"=human-gate
+
+# IM notifications (Feishu / Slack) — leave empty to use NoOp logger:
+export SECOPS_NOTIFIER_WEBHOOK_URL="https://open.feishu.cn/open-apis/bot/v2/hook/<token>"
+export SECOPS_NOTIFIER_APPROVAL_WEBHOOK_URL=""  # falls back to above if unset
+```
+
+### Dispatch rules
+
+| Condition | Actions |
+|---|---|
+| PLATFORM scope (any severity) | `notify` only |
+| CRITICAL + BruteForce / CredentialStuffing | `notify`, `rate_limit`, `block_ip` |
+| CRITICAL + PromptInjection | `notify`, `rate_limit` |
+| CRITICAL + UnauthorizedExec / PrivilegeEscalation / IAMPolicyViolation | `notify`, `isolate_tenant` (human gate) |
+| CRITICAL + other patterns | `notify` |
+| HIGH + any | `notify`, `rate_limit` |
+| MEDIUM / LOW / INFO | No action |
+
+### Two-flag safety model
+
+| `SECOPS_REMEDIATION_ENABLED` | `SECOPS_REMEDIATION_DRY_RUN` | Behaviour |
+|---|---|---|
+| `false` (default) | — | Engine skipped entirely |
+| `true` | `true` (default) | Dispatch runs, audit log written, **no real API calls** |
+| `true` | `false` | Full execution — adapters called, approvals queued |
+
+Use `ENABLED=true, DRY_RUN=true` first to validate dispatch logic in production before enabling live execution.
+
+### Swap NoOp adapters for real implementations
+
+When internal API contracts are known, update `runRemediation()` in `cmd/agent/main.go`:
+
+```go
+// Before (NoOp):
+adapterSet.RateLimiter = adapters.NewNoOpRateLimiter(logger)
+
+// After (HTTP):
+adapterSet.RateLimiter = adapters.NewHTTPRateLimiter(baseURL, token)
+```
+
+No changes to engine, dispatcher, or audit logic required.
+
+### Traceability: correlate actions to original logs
+
+`request_id` is the end-to-end key:
+
+```bash
+# All findings
+jq '[.tenant_reports[].findings[].request_id]' output/incident_report.json
+
+# Auto-executed actions
+grep '"executed":true' output/remediation_audit.log | jq -r '.request_id'
+
+# Pending human approval
+jq -r '.request_id' output/pending_approvals.json
+```
+
+Findings whose `request_id` does not appear in either file had no action taken (severity below threshold or attack pattern with no mapped action).
+
+### Verify remediation audit log
+
+```bash
+# See all decisions after a run
+cat output/remediation_audit.log | jq .
+
+# Filter by action type
+grep '"action_type":"rate_limit"' output/remediation_audit.log | jq .
+
+# Check pending approvals
+cat output/pending_approvals.json | jq .
+```
+
+## Security
+
+Full design rationale is in [DESIGN.md](DESIGN.md):
+- Q1: Multi-tenant data isolation strategy
+- Q2: Prompt injection threat model for the LLM pipeline
+- Q3: Access control model for incident reports
+- Q4: Automated remediation engine (Port-and-Adapter pattern, risk model, IM integration, traceability)
+
+**Implemented security properties:**
 
 | Property | Implementation |
 |----------|---------------|
@@ -318,7 +415,94 @@ See [DESIGN.md](../DESIGN.md) for the full Part B design document covering:
 | Tenant mapping ephemeral | `tenantMapper` is in-memory only, destroyed after the run |
 | Report RBAC enforcement | `server/auth.go` JWT middleware + `handlers.go` role-based filtering |
 | Access audit trail | `server/audit.go` append-only JSON Lines log (SOC 2 CC7.2/CC7.3) |
+| Remediation isolated from analysis | Engine runs after reports are written; failure cannot corrupt reports |
+| Remediation default-safe | `ENABLED=false` + `DRY_RUN=true` by default; no real API calls until explicitly enabled |
+| High-risk actions human-gated | `isolate_tenant`, `ban_account` written to `pending_approvals.json`, never auto-executed |
+| Remediation audit trail | `remediation_audit.log` records every action decision (executed/dry-run/skipped/pending) |
+
+## What's Next
+
+The following areas are not yet implemented. Each has a clear integration point in the current architecture.
+
+### 1. Connect real internal APIs (replace NoOp adapters)
+
+All four enforcement adapters (`RateLimiter`, `IPBlocker`, `AccountBanner`, `TenantIsolator`) ship as NoOp stubs. Each stub in `internal/remediation/adapters/http.go` has a `// TODO:` comment describing the expected request shape. Once the internal API contract is known:
+
+1. Implement the corresponding `HTTP*` struct method in `http.go`
+2. Swap the NoOp for the HTTP implementation in `runRemediation()` inside `cmd/agent/main.go`
+
+No other files need to change.
+
+| Adapter | What's needed |
+|---|---|
+| `HTTPRateLimiter` | Internal rate-limit API endpoint, request body shape, auth token |
+| `HTTPIPBlocker` | Firewall/WAF API endpoint + source IP field (see item 5 below) |
+| `HTTPAccountBanner` | Account management API endpoint + user identifier field |
+| `HTTPTenantIsolator` | Tenant management API endpoint + isolation level parameter |
+
+### 2. IM integration — Feishu / Slack notification body
+
+`HTTPNotifier` in `adapters/http.go` is a stub with `// TODO:` comments showing the expected Feishu and Slack webhook message shapes. Implementation requires:
+
+- Feishu card message template for security alerts (`approval_required=false`)
+- Feishu interactive card with Approve/Reject buttons for approval requests (`approval_required=true`)
+- Equivalent Slack Block Kit templates
+- Set `SECOPS_NOTIFIER_WEBHOOK_URL` (and optionally `SECOPS_NOTIFIER_APPROVAL_WEBHOOK_URL`) to activate
+
+### 3. Human approval feedback loop
+
+Currently, high-risk actions are written to `pending_approvals.json` and an IM notification is sent, but clicking Approve in the IM does nothing yet. Closing this loop requires:
+
+- A `POST /remediation/approve?key=<dedupe_key>` endpoint in `serve` mode
+- A `POST /remediation/reject?key=<dedupe_key>` endpoint
+- On approval: look up the `dedupe_key` in `pending_approvals.json`, call the appropriate adapter, update status to `"approved"`
+- The existing JWT middleware in `internal/server/auth.go` can be reused; only `secops-admin` should be permitted to approve
+
+The `dedupe_key` field already exists in every `pending_approvals.json` entry as the lookup key.
+
+### 4. Web UI for remediation management
+
+A minimal frontend on top of the existing `serve` mode could expose:
+
+| Page | Data source |
+|---|---|
+| Pending approvals queue | New `GET /remediation/pending` endpoint |
+| Remediation history | New `GET /remediation/history` endpoint (reads `remediation_audit.log`) |
+| Finding detail (click through from request_id) | Existing `GET /api/v1/reports/{tenant_id}` |
+
+RBAC is already in place — Approve actions would be restricted to `secops-admin`.
+
+### 5. Source IP threading for `block_ip`
+
+`LLMFinding` does not currently carry a source IP (PII is stripped before the LLM call). The `block_ip` action therefore records `tenant_id` and `request_id` but cannot pass an IP to the firewall API. Two options:
+
+- **Option A**: Add a `RequestIDToIP map[string]string` to `AnalyzedBatch`, populated from `RawLog.HttpRequest.RemoteIP` after sanitization — passed to the Remediation Engine without ever entering the LLM context.
+- **Option B**: Add a `SourceIP` field to `LLMFinding` and populate it in a post-sanitization enrichment step.
+
+### 6. Cross-run idempotency
+
+The current dedup map is in-memory and resets on every pipeline run. If the same log file is re-analyzed, remediation actions will fire again. Fix: at engine startup, load all `dedupe_key` values from `remediation_audit.log` into the `seen` map before processing. The file is JSON Lines, so loading is O(n) with minimal overhead.
+
+### 7. CVE database validation
+
+CVE identifiers are currently validated for format (`CVE-YYYY-NNNN...`) and stripped if malformed. A future extension could cross-check them against the NVD API or an internal CVE feed to confirm existence before including them in reports.
+
+### 8. Add a new LLM provider
+
+The `llm.Client` interface makes swapping providers straightforward:
+
+1. Create `internal/llm/openai.go` (or `vertex.go`, etc.)
+2. Implement `llm.Client`:
+   ```go
+   type OpenAIClient struct { ... }
+   func (c *OpenAIClient) Analyze(ctx context.Context, batch models.SanitizedBatch) ([]byte, error) { ... }
+   ```
+3. Add a `case "openai":` branch in `cmd/agent/main.go`
+
+No other changes required — the interface boundary ensures the rest of the pipeline is unaffected.
+
+---
 
 ## Scope Note
 
-- CVE handling currently validates identifier format (`CVE-YYYY-NNNN...`) and strips malformed entries. Existence checks against external CVE databases are an optional future extension.
+- CVE handling currently validates identifier format (`CVE-YYYY-NNNN...`) and strips malformed entries. Existence checks against external CVE databases are an optional future extension (see What's Next above).
