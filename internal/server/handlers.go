@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/wati/secops-agent/pkg/models"
+	"secops-agent/pkg/models"
 )
 
 // reportStore holds the in-memory report data loaded from disk at server startup.

@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/wati/secops-agent/pkg/models"
+	"secops-agent/pkg/models"
 )
 
 // Config holds server-specific configuration.

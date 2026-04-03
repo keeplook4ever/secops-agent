@@ -3,7 +3,7 @@ package ingestion
 import (
 	"strings"
 
-	"github.com/wati/secops-agent/pkg/models"
+	"secops-agent/pkg/models"
 )
 
 // platformLogNames contains substrings that identify infrastructure-level logs.

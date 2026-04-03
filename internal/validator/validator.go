@@ -6,7 +6,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/wati/secops-agent/pkg/models"
+	"secops-agent/pkg/models"
 )
 
 // validSeverities is the set of severity strings we accept from the LLM.

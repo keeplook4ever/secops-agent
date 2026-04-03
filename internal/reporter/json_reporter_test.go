@@ -3,7 +3,7 @@ package reporter
 import (
 	"testing"
 
-	"github.com/wati/secops-agent/pkg/models"
+	"secops-agent/pkg/models"
 )
 
 func TestBuildReport_ExcludeInfoFindings(t *testing.T) {

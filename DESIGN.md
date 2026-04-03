@@ -151,4 +151,147 @@ Reports are tagged with attributes: `tenant_id`, `scope` (TENANT / PLATFORM), an
 
 ---
 
+---
+
+## Question 4: Automated Remediation Engine
+## 问题四：自动化 Remediation 引擎设计
+
+### Background / 背景
+
+The existing pipeline terminates at incident report generation. Findings contain a `remediation` text field describing recommended actions, but no automated execution occurs. This section extends the pipeline with an automated remediation engine that maps LLM findings to concrete enforcement actions.
+
+**Key constraint:** Internal APIs for rate-limiting, IP blocking, account banning, and tenant isolation are unknown at design time. The engine is designed using the **Port-and-Adapter pattern** — interfaces are defined now, NoOp stubs ship immediately, and real HTTP adapters are one-file additions when API contracts become available.
+
+### Extended Pipeline / 扩展后的 Pipeline
+
+```
+Log Ingestion → Sanitization → LLM API → Output Validation → Incident Report
+                                                                      │
+                                                                      ▼
+                                                           Remediation Engine
+                                                                      │
+                                          ┌───────────────────────────┤
+                                          ▼                           ▼
+                                  Auto-execute (low-risk)      Human Gate (high-risk)
+                                  rate_limit, block_ip(low),   isolate_tenant, ban_account,
+                                  notify                        block_ip(high)
+                                          │                           │
+                                          │                     pending_approvals.json
+                                          │                     + IM notification (Feishu/Slack)
+                                          ▼
+                                  remediation_audit.log
+```
+
+### Action Types & Risk Model / 行动类型与风险分级
+
+| Action | Risk | Execution | When triggered |
+|--------|------|-----------|----------------|
+| `notify` | Low | Auto-execute | All CRITICAL/HIGH findings; also approval requests |
+| `rate_limit` | Low | Auto-execute | CRITICAL BruteForce/CredentialStuffing/PromptInjection; all HIGH |
+| `block_ip` | Configurable | Auto (default) or Human-gate | CRITICAL BruteForce/CredentialStuffing |
+| `isolate_tenant` | High | Human-gate only | CRITICAL UnauthorizedExec/PrivilegeEscalation/IAMPolicyViolation |
+| `ban_account` | High | Human-gate only | Not in default dispatch — reserved for future confirmed-ATO trigger |
+
+`block_ip` risk level is configurable via `SECOPS_REMEDIATION_BLOCK_IP_RISK` (`low` = auto-execute, `high` = human-gate). Different deployment environments have different blast radii for IP blocks.
+
+`ban_account` is intentionally absent from the default dispatch table. The current finding schema does not carry enough signal to confirm account takeover. The type and adapter interface are defined, ready for a future rule.
+
+### Dispatcher Rules / 分发规则
+
+PLATFORM scope check is applied first — infrastructure-level findings never trigger tenant-scoped actions.
+
+| Condition | Actions |
+|-----------|---------|
+| PLATFORM scope (any severity) | `notify(low)` only |
+| CRITICAL + BruteForce / CredentialStuffing | `notify`, `rate_limit`, `block_ip(configurable)` |
+| CRITICAL + PromptInjection | `notify`, `rate_limit` |
+| CRITICAL + UnauthorizedExec / PrivilegeEscalation / IAMPolicyViolation | `notify`, `isolate_tenant(high)` |
+| CRITICAL + any other pattern | `notify` |
+| HIGH + any | `notify`, `rate_limit` |
+| MEDIUM / LOW / INFO | No action |
+
+### Port-and-Adapter Architecture / 适配器架构
+
+The engine depends only on Go interfaces (`RateLimiter`, `IPBlocker`, `AccountBanner`, `TenantIsolator`, `Notifier`). Two implementations are provided:
+
+- **NoOp stubs** (`adapters/noop.go`): log "would execute X", return nil. Fully operational and testable without any real API.
+- **HTTP stubs** (`adapters/http.go`): compile-time checked, panic at runtime. Each method has a `// TODO:` block documenting the expected API contract shape. Prevents accidental deployment of unimplemented adapters.
+
+Swapping NoOp → real HTTP adapters requires changing lines only in `cmd/agent/main.go`. No changes to engine, dispatcher, or audit logic.
+
+### Tenant Isolation in Remediation / Remediation 中的租户隔离
+
+Every `ActionSpec` carries the real `tenant_id` (not the sanitized placeholder). Adapters are responsible for scoping their API calls to that tenant. PLATFORM-scope findings produce `notify`-only actions — no tenant resource is ever touched by a platform-level finding.
+
+### Idempotency / 幂等性
+
+Dedup key = `sha256(request_id + "|" + action_type)`, hex-encoded. Maintained in-memory per pipeline run. The `remediation_audit.log` provides the durable cross-run record; loading it at startup for cross-run dedup is a noted future improvement.
+
+### Human Approval & IM Notification / 人工审批与 IM 通知
+
+High-risk actions are written to `output/pending_approvals.json` (JSON Lines, append-only) **and** trigger a `Notifier` call with `Meta["approval_required"]="true"`.
+
+The `Notifier` HTTP adapter supports two message templates:
+- **Security alert** (`approval_required=false`): CRITICAL/HIGH event found
+- **Approval request** (`approval_required=true`): high-risk action requires sign-off; message includes tenant_id, action_type, request_id, and approve/reject instructions
+
+IM system (Feishu / Slack) is configured via:
+- `SECOPS_NOTIFIER_WEBHOOK_URL` — general alert webhook
+- `SECOPS_NOTIFIER_APPROVAL_WEBHOOK_URL` — approval request webhook (falls back to above if unset)
+
+Both empty → NoOp notifier (safe default, no outbound calls).
+
+**Approval feedback loop (future):** A `/remediation/approve?key=<dedupe_key>` endpoint in `serve` mode would complete the loop. The `dedupe_key` in `pending_approvals.json` is the lookup key; adapter interfaces support standalone invocation.
+
+### Traceability / 溯源
+
+`request_id` is the end-to-end correlation key:
+
+```
+Raw log (jsonPayload.request_id)
+  → SanitizedLog.OriginalRequestID
+  → LLMFinding.RequestID
+  → ActionSpec.RequestID
+  → RemediationAuditEntry.request_id / PendingApproval.request_id
+```
+
+To answer "which of the N logs were remediated?":
+
+| Question | Source |
+|----------|--------|
+| All findings (one per log) | `output/incident_report.json` — findings[].request_id |
+| Auto-executed actions | `output/remediation_audit.log` — entries where `executed=true` |
+| Pending human approval | `output/pending_approvals.json` — entries where `status="pending"` |
+| No action taken | request_ids in incident_report not present in either file |
+
+### Two-Flag Safety Model / 两级安全开关
+
+| `SECOPS_REMEDIATION_ENABLED` | `SECOPS_REMEDIATION_DRY_RUN` | Behaviour |
+|---|---|---|
+| `false` (default) | — | Engine skipped entirely |
+| `true` | `true` (default) | Dispatch runs, audit log written, adapters NOT called |
+| `true` | `false` | Full execution — adapters called, approvals queued |
+
+`ENABLED=true, DRY_RUN=true` lets operators validate the dispatch logic in production before enabling live execution.
+
+### New Environment Variables / 新增环境变量
+
+| Variable | Default | Description |
+|---|---|---|
+| `SECOPS_REMEDIATION_ENABLED` | `false` | Enable the remediation engine |
+| `SECOPS_REMEDIATION_DRY_RUN` | `true` | Log intent only; do not call adapters |
+| `SECOPS_REMEDIATION_MIN_SEVERITY` | `HIGH` | Minimum severity to trigger any action |
+| `SECOPS_REMEDIATION_BLOCK_IP_RISK` | `low` | Risk level for block_ip (`low`=auto, `high`=human-gate) |
+| `SECOPS_NOTIFIER_WEBHOOK_URL` | `` | IM webhook for security alerts |
+| `SECOPS_NOTIFIER_APPROVAL_WEBHOOK_URL` | `` | IM webhook for approval requests (falls back to above) |
+
+### Output Files / 输出文件
+
+| File | Format | Purpose |
+|---|---|---|
+| `output/remediation_audit.log` | JSON Lines, append-only | Immutable record of every action decision (executed, dry-run, skipped, pending) |
+| `output/pending_approvals.json` | JSON Lines, append-only | Queue of high-risk actions awaiting human sign-off |
+
+---
+
 *This document is part of the SecOps Buddy Agent assignment submission for WATI.*

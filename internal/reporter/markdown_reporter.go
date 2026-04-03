@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wati/secops-agent/pkg/models"
+	"secops-agent/pkg/models"
 )
 
 // WriteMarkdown generates a human-readable Markdown incident report.

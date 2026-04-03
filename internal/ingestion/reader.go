@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/wati/secops-agent/pkg/models"
+	"secops-agent/pkg/models"
 )
 
 // Reader reads and parses the raw JSON log file.

@@ -3,7 +3,7 @@ package llm
 import (
 	"context"
 
-	"github.com/wati/secops-agent/pkg/models"
+	"secops-agent/pkg/models"
 )
 
 // Client is the LLM provider interface. Implement this interface to add

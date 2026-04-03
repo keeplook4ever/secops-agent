@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/wati/secops-agent/internal/ingestion"
-	"github.com/wati/secops-agent/internal/llm"
-	"github.com/wati/secops-agent/internal/sanitizer"
-	"github.com/wati/secops-agent/internal/validator"
-	"github.com/wati/secops-agent/pkg/models"
+	"secops-agent/internal/ingestion"
+	"secops-agent/internal/llm"
+	"secops-agent/internal/sanitizer"
+	"secops-agent/internal/validator"
+	"secops-agent/pkg/models"
 )
 
 // Analyzer is the central pipeline coordinator. It wires together ingestion,

@@ -1,3 +1,3 @@
-module github.com/wati/secops-agent
+module secops-agent
 
 go 1.22

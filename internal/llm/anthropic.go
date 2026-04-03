@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/wati/secops-agent/pkg/models"
+	"secops-agent/pkg/models"
 )
 
 const (

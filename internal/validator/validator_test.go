@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wati/secops-agent/pkg/models"
+	"secops-agent/pkg/models"
 )
 
 func TestValidate_FindingCountMismatch(t *testing.T) {

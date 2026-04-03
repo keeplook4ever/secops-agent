@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 )
 
 // Config holds all runtime configuration for the SecOps Agent.
@@ -26,6 +27,16 @@ type Config struct {
 	// Server mode (DESIGN.md Q3)
 	ServerPort int    // SECOPS_SERVER_PORT, default 8080
 	JWTSecret  string // SECOPS_JWT_SECRET — required in serve mode
+
+	// Remediation engine (DESIGN.md Q4)
+	RemediationEnabled     bool   // SECOPS_REMEDIATION_ENABLED, default false
+	RemediationDryRun      bool   // SECOPS_REMEDIATION_DRY_RUN, default true
+	RemediationMinSeverity string // SECOPS_REMEDIATION_MIN_SEVERITY, default "HIGH"
+	RemediationBlockIPRisk string // SECOPS_REMEDIATION_BLOCK_IP_RISK, default "low"
+
+	// Notifier (IM integration — Feishu / Slack)
+	NotifierWebhookURL         string // SECOPS_NOTIFIER_WEBHOOK_URL, default ""
+	NotifierApprovalWebhookURL string // SECOPS_NOTIFIER_APPROVAL_WEBHOOK_URL, default ""
 }
 
 // Load reads configuration from environment variables.
@@ -45,6 +56,15 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 
+	remEnabled, err := getEnvBoolDefault("SECOPS_REMEDIATION_ENABLED", false)
+	if err != nil {
+		return nil, err
+	}
+	remDryRun, err := getEnvBoolDefault("SECOPS_REMEDIATION_DRY_RUN", true)
+	if err != nil {
+		return nil, err
+	}
+
 	cfg := &Config{
 		LLMProvider:         getEnvDefault("SECOPS_LLM_PROVIDER", "anthropic"),
 		LLMAPIKey:           os.Getenv("SECOPS_LLM_API_KEY"),
@@ -55,6 +75,14 @@ func Load() (*Config, error) {
 		ConfidenceThreshold: confidenceThreshold,
 		ServerPort:          serverPort,
 		JWTSecret:           os.Getenv("SECOPS_JWT_SECRET"),
+
+		RemediationEnabled:     remEnabled,
+		RemediationDryRun:      remDryRun,
+		RemediationMinSeverity: getEnvDefault("SECOPS_REMEDIATION_MIN_SEVERITY", "HIGH"),
+		RemediationBlockIPRisk: getEnvDefault("SECOPS_REMEDIATION_BLOCK_IP_RISK", "low"),
+
+		NotifierWebhookURL:         os.Getenv("SECOPS_NOTIFIER_WEBHOOK_URL"),
+		NotifierApprovalWebhookURL: os.Getenv("SECOPS_NOTIFIER_APPROVAL_WEBHOOK_URL"),
 	}
 
 	return cfg, nil
@@ -75,6 +103,20 @@ func (c *Config) ValidateAnalyze() error {
 func (c *Config) ValidateServe() error {
 	if c.JWTSecret == "" {
 		return fmt.Errorf("config: SECOPS_JWT_SECRET is required in serve mode")
+	}
+	return nil
+}
+
+// ValidateRemediation checks that remediation config values are valid.
+func (c *Config) ValidateRemediation() error {
+	validSev := map[string]bool{
+		"CRITICAL": true, "HIGH": true, "MEDIUM": true, "LOW": true, "INFO": true,
+	}
+	if !validSev[strings.ToUpper(c.RemediationMinSeverity)] {
+		return fmt.Errorf("config: SECOPS_REMEDIATION_MIN_SEVERITY must be CRITICAL|HIGH|MEDIUM|LOW|INFO, got %q", c.RemediationMinSeverity)
+	}
+	if c.RemediationBlockIPRisk != "low" && c.RemediationBlockIPRisk != "high" {
+		return fmt.Errorf("config: SECOPS_REMEDIATION_BLOCK_IP_RISK must be low|high, got %q", c.RemediationBlockIPRisk)
 	}
 	return nil
 }

@@ -1,7 +1,7 @@
 package sanitizer
 
 import (
-	"github.com/wati/secops-agent/pkg/models"
+	"secops-agent/pkg/models"
 )
 
 // Sanitizer is the public interface for the sanitization layer.

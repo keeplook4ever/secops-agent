@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/wati/secops-agent/pkg/models"
+	"secops-agent/pkg/models"
 )
 
 // piiRedactor handles IP addresses, email addresses, database names,
