@@ -1,6 +1,6 @@
 # SecOps Buddy Agent
 
-AI-powered security log analysis and SOC 2 compliance automation for WATI's multi-tenant platform.
+AI-powered security log analysis and SOC 2 compliance automation for ACME's multi-tenant platform.
 
 ## Architecture
 
@@ -238,7 +238,7 @@ Recommended payloads for local testing:
 
 - `secops-admin`:
   ```json
-  {"sub":"admin@wati.io","role":"secops-admin","exp":9999999999}
+  {"sub":"admin@acme.io","role":"secops-admin","exp":9999999999}
   ```
 - `tenant-admin` for tenant `600647`:
   ```json
@@ -246,7 +246,7 @@ Recommended payloads for local testing:
   ```
 - `engineer-readonly`:
   ```json
-  {"sub":"eng@wati.io","role":"engineer-readonly","exp":9999999999}
+  {"sub":"eng@acme.io","role":"engineer-readonly","exp":9999999999}
   ```
 
 #### 8) Validate RBAC behavior with curl

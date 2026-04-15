@@ -294,4 +294,4 @@ To answer "which of the N logs were remediated?":
 
 ---
 
-*This document is part of the SecOps Buddy Agent assignment submission for WATI.*
+*This document is part of the SecOps Buddy Agent assignment submission for ACME.*

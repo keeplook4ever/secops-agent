@@ -16,7 +16,7 @@ import (
 //   even if an adversarial instruction slips through the pre-LLM injection
 //   filter, it arrives in the data position where the LLM has been explicitly
 //   told to treat content as untrusted raw data, not as commands.
-const systemPrompt = `You are a security analyst for WATI, a multi-tenant SaaS platform.
+const systemPrompt = `You are a security analyst for ACME, a multi-tenant SaaS platform.
 Your task is to analyse sanitized security log batches and produce structured incident findings.
 
 ## Output Format

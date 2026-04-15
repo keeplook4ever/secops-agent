@@ -35,7 +35,7 @@ var (
 	)
 	// Host-based server identifiers leak internal topology.
 	reServerHost = regexp.MustCompile(
-		`live-server-\d+\.wati\.io`,
+		`live-server-\d+\.acme\.io`,
 	)
 	reGenericURLHost = regexp.MustCompile(`(?i)(https?://)([^/\s]+)`)
 )

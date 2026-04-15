@@ -56,7 +56,7 @@ func TestSanitize_RedactsUserAgentWhenNoInjection(t *testing.T) {
 		TenantID: "600647",
 		Raw: models.RawLog{
 			HttpRequest: models.HttpRequest{
-				UserAgent: "app/1.0 contact admin@wati.io bearer abcdefghijklmnopqrstuvwxyz12345",
+				UserAgent: "app/1.0 contact admin@acme.io bearer abcdefghijklmnopqrstuvwxyz12345",
 			},
 			JsonPayload: models.JsonPayload{
 				RequestID: "req-1",
@@ -65,7 +65,7 @@ func TestSanitize_RedactsUserAgentWhenNoInjection(t *testing.T) {
 		},
 	})
 
-	if strings.Contains(log.UserAgent, "admin@wati.io") {
+	if strings.Contains(log.UserAgent, "admin@acme.io") {
 		t.Fatalf("expected email to be redacted in user agent, got %q", log.UserAgent)
 	}
 	if strings.Contains(log.UserAgent, "abcdefghijklmnopqrstuvwxyz12345") {
@@ -81,12 +81,12 @@ func TestSanitize_RedactsUserAgentWhenNoInjection(t *testing.T) {
 
 func TestRedactURL_RedactsHostAndQueryValues(t *testing.T) {
 	r := newPIIRedactor()
-	got := r.RedactURL("https://live-server-74.wati.io/v1/tenant/600647?token=abc123&email=a@wati.io")
+	got := r.RedactURL("https://live-server-74.acme.io/v1/tenant/600647?token=abc123&email=a@acme.io")
 
 	if !strings.Contains(got, "REDACTED_HOST") {
 		t.Fatalf("expected host redaction, got %q", got)
 	}
-	if strings.Contains(got, "abc123") || strings.Contains(got, "a@wati.io") {
+	if strings.Contains(got, "abc123") || strings.Contains(got, "a@acme.io") {
 		t.Fatalf("expected query values redacted, got %q", got)
 	}
 	if !strings.Contains(got, "token=REDACTED") || !strings.Contains(got, "email=REDACTED") {
